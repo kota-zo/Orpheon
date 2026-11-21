@@ -76,9 +76,11 @@ class ProviderChain(
      * others get [graceMs] more, then what they would have added is left out of this answer. Waiting for every one
      * showed a search only when the slowest provider had answered (up to its time limit, 8 s)
      * while the account's own answer was there in half a second (reported: search slow to load).
+     * An answer that [leads] refuses (a search that found nothing) does not lead: a service that finds nothing in a
+     * country (Deezer in India: a count, no items) would otherwise cut off the ones after it.
      */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private suspend fun <T> fromAll(quick: Boolean = false, call: suspend (MetadataProvider) -> T): List<T> = coroutineScope {
+    private suspend fun <T> fromAll(quick: Boolean = false, leads: (T) -> Boolean = { true }, call: suspend (MetadataProvider) -> T): List<T> = coroutineScope {
         val asked = available()
         val failures = arrayOfNulls<Throwable>(asked.size)
         val answers = asked.mapIndexed { i, p ->
@@ -98,7 +100,7 @@ class ProviderChain(
         // the providers (an ISRC, a match) waits for every one, as its answer may be the slow one's.
         if (quick) {
             var lead = 0
-            while (lead < answers.size && answers[lead].await() == null) lead++
+            while (lead < answers.size && answers[lead].await()?.let(leads) != true) lead++
             if (lead < answers.size) withTimeoutOrNull(graceMs) { answers.awaitAll() }
         } else answers.awaitAll()
         val got = answers.mapNotNull { a -> if (a.isCompleted) a.getCompleted() else { a.cancel(); null } }
@@ -115,7 +117,7 @@ class ProviderChain(
 
     /** Tracks with their ISRCs, the same recording once. */
     suspend fun searchHits(query: String, offset: Int = 0, limit: Int = 30): Page<Hit> =
-        merged(fromAll(quick = true) { it.searchTracks(query, offset, limit) }, offset, limit, Match::same)
+        merged(fromAll(quick = true, leads = { it.items.isNotEmpty() }) { it.searchTracks(query, offset, limit) }, offset, limit, Match::same)
 
     /**
      * The recording described, on whichever provider knows it best. Its ISRC decides when there is one, then a
@@ -214,10 +216,10 @@ class ProviderChain(
     }
 
     override suspend fun artists(query: String, offset: Int, limit: Int): Page<Artist> =
-        merged(fromAll(quick = true) { it.searchArtists(query, offset, limit) }, offset, limit) { a, b -> Match.name(a.name) == Match.name(b.name) }
+        merged(fromAll(quick = true, leads = { it.items.isNotEmpty() }) { it.searchArtists(query, offset, limit) }, offset, limit) { a, b -> Match.name(a.name) == Match.name(b.name) }
 
     override suspend fun albums(query: String, offset: Int, limit: Int): Page<Album> =
-        merged(fromAll(quick = true) { it.searchAlbums(query, offset, limit) }, offset, limit) { a, b ->
+        merged(fromAll(quick = true, leads = { it.items.isNotEmpty() }) { it.searchAlbums(query, offset, limit) }, offset, limit) { a, b ->
             Match.title(a.name) == Match.title(b.name) && Match.name(a.artists.firstOrNull()?.name.orEmpty()) == Match.name(b.artists.firstOrNull()?.name.orEmpty())
         }
 

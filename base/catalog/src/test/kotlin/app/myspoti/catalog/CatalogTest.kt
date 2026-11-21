@@ -157,6 +157,15 @@ class CatalogTest {
         assertEquals(listOf("a:track:1", "b:track:8"), chain.tracks("q").items.map { it.uri })
     }
 
+    @Test fun anEmptyAnswerDoesNotLeadASearch() = runBlocking {
+        // A service that finds nothing in a country (Deezer in India: a count, no items) must not cut off the next one.
+        val slow = object : FakeProvider("b", listOf(Hit(track("b:track:1", "Song", "Band")))) {
+            override suspend fun searchTracks(query: String, offset: Int, limit: Int): Page<Hit> { kotlinx.coroutines.delay(600); return super.searchTracks(query, offset, limit) }
+        }
+        val chain = ProviderChain(listOf(FakeProvider("a"), slow))
+        assertEquals(listOf("b:track:1"), chain.searchHits("q").items.map { it.track.uri })
+    }
+
     @Test fun aProviderDownLeavesTheOthersAnswer() = runBlocking {
         val chain = ProviderChain(listOf(FakeProvider("a", down = true), FakeProvider("b", listOf(Hit(track("b:track:1", "Song", "Band"))))))
         assertEquals(1, chain.tracks("q").items.size)
